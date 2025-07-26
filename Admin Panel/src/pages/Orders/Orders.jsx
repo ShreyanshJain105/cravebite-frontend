@@ -6,56 +6,82 @@ const Orders = () => {
    const [data, setData] = useState([]);
    const [loading, setLoading] = useState(true);
    const [error, setError] = useState(null);
+   const [updating, setUpdating] = useState(null); // Track which order is being updated
+   
+   const getAuthHeaders = () => {
+      const token = localStorage.getItem('token');
+      return token ? { 'Authorization': `Bearer ${token}` } : {};
+   };
    
    const fetchOrders = async () => {
       try {
          setLoading(true);
          setError(null);
          
-         const token = localStorage.getItem('token');
-         const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+         const headers = getAuthHeaders();
          
          const response = await axios.get('http://localhost:8080/api/orders/all', { headers });
          
-         let ordersArray = [];
-         
-         if (Array.isArray(response.data)) {
-            ordersArray = response.data;
-         } else {
-            ordersArray = [];
-         }
+         // Ensure we always have an array
+         const ordersArray = Array.isArray(response.data) ? response.data : [];
          
          setData(ordersArray);
          
       } catch (error) {
          console.error('Error fetching orders:', error);
-         setError(error.response?.data?.message || error.message || 'Failed to fetch orders');
+         
+         // Handle different error scenarios
+         if (error.response?.status === 401) {
+            setError('Authentication failed. Please log in again.');
+            // Optionally redirect to login
+         } else if (error.response?.status === 403) {
+            setError('Access denied. Admin privileges required.');
+         } else {
+            setError(error.response?.data?.message || error.message || 'Failed to fetch orders');
+         }
       } finally {
          setLoading(false);
       }
-   }
+   };
    
    const updateStatus = async (event, orderId) => {
       try {
-         const token = localStorage.getItem('token');
-         const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+         setUpdating(orderId);
+         const newStatus = event.target.value;
+         
+         const headers = getAuthHeaders();
          
          await axios.patch(
-            `http://localhost:8080/api/orders/status/${orderId}?status=${event.target.value}`,
+            `http://localhost:8080/api/orders/status/${orderId}?status=${newStatus}`,
             null,
             { headers }
          );
          
-         await fetchOrders();
+         // Update the local state immediately for better UX
+         setData(prevData => 
+            prevData.map(order => 
+               order.id === orderId 
+                  ? { ...order, orderStatus: newStatus }
+                  : order
+            )
+         );
+         
       } catch (error) {
          console.error('Error updating status:', error);
-         alert('Failed to update status: ' + (error.response?.data?.message || error.message));
+         
+         // Reset the select value on error
+         event.target.value = data.find(order => order.id === orderId)?.orderStatus || 'PENDING';
+         
+         const errorMessage = error.response?.data?.message || error.message || 'Failed to update status';
+         alert('Failed to update status: ' + errorMessage);
+      } finally {
+         setUpdating(null);
       }
-   }
+   };
    
    useEffect(() => {
       fetchOrders();
-   }, [])
+   }, []);
    
    if (loading) {
       return (
@@ -100,63 +126,99 @@ const Orders = () => {
             <div className="col-11 card">
                <div className="card-header d-flex justify-content-between align-items-center">
                   <h5 className="mb-0">Orders ({data.length})</h5>
-                  <button className="btn btn-outline-primary btn-sm" onClick={fetchOrders}>
-                     Refresh
+                  <button 
+                     className="btn btn-outline-primary btn-sm" 
+                     onClick={fetchOrders}
+                     disabled={loading}
+                  >
+                     {loading ? 'Loading...' : 'Refresh'}
                   </button>
                </div>
-               <table className="table table-responsive">
-                  <tbody>
-                     {data.length > 0 ? data.map((order, index) => (
-                        <tr key={order.id || index}>
-                           <td>
-                              <img src={assets.parcel} alt="order" height={48} width={48} />
-                           </td>
-                           <td>
-                              <div>
-                                 {order.orderedItems?.map((item, itemIndex) => (
-                                    <span key={itemIndex}>
-                                       {item.name} x {item.quantity}
-                                       {itemIndex < order.orderedItems.length - 1 ? ', ' : ''}
-                                    </span>
-                                 ))}
-                              </div>
-                              <div>
-                                 {order.userAddress}
-                              </div>
-                           </td>
-                           <td>&#x20B9; {order.amount?.toFixed(2)}</td>
-                           <td>Items: {order.orderedItems?.length || 0}</td>
-                           <td>
-                              <select 
-                                 className='form-control' 
-                                 onChange={(event) => updateStatus(event, order.id)} 
-                                 value={order.orderStatus || 'PENDING'}
-                              >
-                                 <option value='PENDING'>PENDING</option>
-                                 <option value='SHIPPED'>SHIPPED</option>
-                                 <option value='DELIVERED'>DELIVERED</option>
-                                 <option value='CANCELLED'>CANCELLED</option>
-                              </select>
-                           </td>
-                        </tr>
-                     )) : (
+               <div className="table-responsive">
+                  <table className="table">
+                     <thead>
                         <tr>
-                           <td colSpan="5" className="text-center py-4">
-                              <div className="text-muted">
-                                 <h6>No orders found</h6>
-                                 <button className="btn btn-link btn-sm" onClick={fetchOrders}>
-                                    🔄 Refresh
-                                 </button>
-                              </div>
-                           </td>
+                           <th>Image</th>
+                           <th>Order Details</th>
+                           <th>Amount</th>
+                           <th>Items</th>
+                           <th>Status</th>
                         </tr>
-                     )}
-                  </tbody>
-               </table>
+                     </thead>
+                     <tbody>
+                        {data.length > 0 ? data.map((order, index) => (
+                           <tr key={order.id || index}>
+                              <td>
+                                 <img 
+                                    src={assets.parcel} 
+                                    alt="order" 
+                                    height={48} 
+                                    width={48} 
+                                    className="img-fluid"
+                                 />
+                              </td>
+                              <td>
+                                 <div className="mb-2">
+                                    <strong>Items:</strong>
+                                    <br />
+                                    {order.orderedItems?.map((item, itemIndex) => (
+                                       <span key={itemIndex}>
+                                          {item.name} x {item.quantity}
+                                          {itemIndex < order.orderedItems.length - 1 ? ', ' : ''}
+                                       </span>
+                                    )) || 'No items'}
+                                 </div>
+                                 <div>
+                                    <strong>Address:</strong>
+                                    <br />
+                                    {order.userAddress || 'No address provided'}
+                                 </div>
+                              </td>
+                              <td>
+                                 <strong>&#x20B9; {order.amount?.toFixed(2) || '0.00'}</strong>
+                              </td>
+                              <td>
+                                 <span className="badge badge-info">
+                                    {order.orderedItems?.length || 0} items
+                                 </span>
+                              </td>
+                              <td>
+                                 <select 
+                                    className='form-control' 
+                                    onChange={(event) => updateStatus(event, order.id)} 
+                                    value={order.orderStatus || 'PENDING'}
+                                    disabled={updating === order.id}
+                                 >
+                                    <option value='PENDING'>PENDING</option>
+                                    <option value='SHIPPED'>SHIPPED</option>
+                                    <option value='DELIVERED'>DELIVERED</option>
+                                    <option value='CANCELLED'>CANCELLED</option>
+                                 </select>
+                                 {updating === order.id && (
+                                    <small className="text-muted">Updating...</small>
+                                 )}
+                              </td>
+                           </tr>
+                        )) : (
+                           <tr>
+                              <td colSpan="5" className="text-center py-4">
+                                 <div className="text-muted">
+                                    <h6>No orders found</h6>
+                                    <p>There are no orders to display.</p>
+                                    <button className="btn btn-link btn-sm" onClick={fetchOrders}>
+                                       🔄 Refresh
+                                    </button>
+                                 </div>
+                              </td>
+                           </tr>
+                        )}
+                     </tbody>
+                  </table>
+               </div>
             </div>
          </div>
       </div>
    );
-}
+};
 
 export default Orders;
